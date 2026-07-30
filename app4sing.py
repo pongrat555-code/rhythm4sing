@@ -8,12 +8,12 @@ st.set_page_config(
 )
 
 st.title("🎵 Rhythm Guide for Singers")
-st.subheader("ระบบช่วยจับจังหวะเพลงด้วยการสั่น")
+st.subheader("ระบบช่วยจับจังหวะเพลงด้วยการสั่นแบบ Real-time")
 
 st.markdown("""
 **วิธีใช้งาน:**
-1. **กดปุ่มค้างไว้** เพื่อเริ่มฟังเสียงดนตรีผ่านไมโครโฟน
-2. **ปล่อยปุ่ม** เมื่อต้องการคำนวณจังหวะ -> โทรศัพท์จะเริ่มสั่นตามจังหวะเพลงทันที
+1. **กดปุ่มค้างไว้** เพื่อฟังเสียงดนตรีผ่านไมโครโฟน -> **โทรศัพท์จะสั่นตามจังหวะเพลงจริงทันที**
+2. **ปล่อยปุ่ม** เมื่อพอใจกับจังหวะ -> โทรศัพท์จะสั่นต่อด้วยจังหวะที่เสถียรอย่างต่อเนื่องโดยไม่สะดุด
 3. **กดปุ่มอีกครั้ง (แตะ 1 ครั้ง)** เพื่อหยุดการสั่น
 """)
 
@@ -22,50 +22,67 @@ html_code = """
 <!DOCTYPE html>
 <html>
 <head>
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <style>
+        * {
+            box-sizing: border-box;
+            user-select: none;
+            -webkit-user-select: none;
+            -webkit-touch-callout: none;
+        }
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: transparent;
+        }
         .container {
             display: flex;
             flex-direction: column;
             align-items: center;
             justify-content: center;
-            font-family: sans-serif;
-            margin-top: 20px;
+            font-family: system-ui, -apple-system, sans-serif;
+            padding: 20px 0;
         }
         .main-btn {
-            width: 200px;
-            height: 200px;
+            width: 220px;
+            height: 220px;
             border-radius: 50%;
             border: none;
-            background-color: #2196F3;
+            background: linear-gradient(145deg, #2196F3, #1e88e5);
             color: white;
-            font-size: 18px;
+            font-size: 20px;
             font-weight: bold;
-            box-shadow: 0 8px 15px rgba(0,0,0,0.2);
+            box-shadow: 0 10px 25px rgba(33, 150, 243, 0.4);
             cursor: pointer;
-            user-select: none;
-            -webkit-user-select: none;
-            touch-action: manipulation;
-            transition: all 0.2s ease;
+            touch-action: none;
+            transition: transform 0.1s ease, background 0.3s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            padding: 20px;
         }
-        .main-btn:active, .main-btn.listening {
-            background-color: #f44336;
+        .main-btn:active, .main-btn.holding {
+            background: linear-gradient(145deg, #ff5722, #f44336);
             transform: scale(0.95);
+            box-shadow: 0 5px 15px rgba(244, 67, 54, 0.5);
         }
         .main-btn.vibrating {
-            background-color: #4CAF50;
+            background: linear-gradient(145deg, #4CAF50, #43a047);
             animation: pulse 1s infinite;
         }
         .status {
-            margin-top: 20px;
-            font-size: 16px;
+            margin-top: 25px;
+            font-size: 18px;
+            font-weight: 500;
             color: #333;
             text-align: center;
+            min-height: 27px;
         }
         .bpm-display {
-            font-size: 28px;
-            font-weight: bold;
-            color: #1E88E5;
+            font-size: 36px;
+            font-weight: 800;
+            color: #1976D2;
             margin-top: 10px;
         }
         @keyframes pulse {
@@ -78,49 +95,68 @@ html_code = """
 <body>
 
 <div class="container">
-    <button id="rhythmBtn" class="main-btn">กดค้างเพื่อฟังจังหวะ</button>
+    <button id="rhythmBtn" class="main-btn">กดค้าง<br>เพื่อจับจังหวะ</button>
     <div id="status" class="status">พร้อมใช้งาน</div>
     <div id="bpmDisplay" class="bpm-display">-- BPM</div>
 </div>
 
 <script>
-    let audioCtx;
-    let analyser;
-    let microphone;
-    let scriptNode;
-    let isListening = false;
-    let isVibrating = false;
-    let energyBuffer = [];
-    let intervalId = null;
-    let calculatedBPM = 0;
+    // System States: 'IDLE', 'HOLDING', 'LOCKED'
+    let currentState = 'IDLE';
+
+    let audioCtx = null;
+    let analyser = null;
+    let microphone = null;
+    let scriptNode = null;
+
+    let beatTimestamps = [];
+    let lastBeatTime = 0;
+    let lockedIntervalMs = 0;
+    
+    let timerTimeout = null;
+    let timerInterval = null;
 
     const btn = document.getElementById('rhythmBtn');
     const statusText = document.getElementById('status');
     const bpmDisplay = document.getElementById('bpmDisplay');
 
-    // ตรวจสอบการรองรับการสั่น
     const supportsVibration = "vibrate" in navigator;
 
-    // Event Listeners สำหรับ Desktop และ Mobile Touch
-    btn.addEventListener('mousedown', startListening);
-    btn.addEventListener('mouseup', stopListeningAndVibrate);
-    btn.addEventListener('touchstart', (e) => { e.preventDefault(); startListening(); });
-    btn.addEventListener('touchend', (e) => { e.preventDefault(); stopListeningAndVibrate(); });
+    // --- Touch & Mouse Event Handling ---
+    btn.addEventListener('pointerdown', handlePointerDown);
+    btn.addEventListener('pointerup', handlePointerUp);
+    btn.addEventListener('pointerleave', handlePointerUp);
 
-    async function startListening() {
-        if (isVibrating) {
-            // ถ้ากำลังสั่นอยู่ แล้วกดซ้ำ ให้หยุดสั่นทันที
-            stopVibration();
+    function handlePointerDown(e) {
+        e.preventDefault();
+        
+        // ถ้ากำลังสั่นแบบ LOCKED อยู่ แล้วกดปุ่มซ้ำ -> ให้หยุดทำงาน
+        if (currentState === 'LOCKED') {
+            stopAll();
             return;
         }
 
-        if (isListening) return;
-        isListening = true;
-        energyBuffer = [];
+        if (currentState === 'IDLE') {
+            startHolding();
+        }
+    }
 
-        btn.classList.add('listening');
-        btn.innerText = "กำลังฟัง...";
-        statusText.innerText = "กำลังตรวจจับเสียงดนตรี...";
+    function handlePointerUp(e) {
+        e.preventDefault();
+        if (currentState === 'HOLDING') {
+            lockAndContinueVibrating();
+        }
+    }
+
+    // --- 1. เริ่มกดค้าง (HOLDING) -> ฟังเสียง + สั่น Real-time ---
+    async function startHolding() {
+        currentState = 'HOLDING';
+        beatTimestamps = [];
+        lastBeatTime = 0;
+
+        btn.classList.add('holding');
+        btn.innerHTML = "กำลังฟัง & สั่น<br>ตามจังหวะ...";
+        statusText.innerText = "กำลังตรวจจับจังหวะเสียงดนตรี...";
         bpmDisplay.innerText = "-- BPM";
 
         try {
@@ -130,136 +166,169 @@ html_code = """
             analyser = audioCtx.createAnalyser();
             analyser.fftSize = 256;
             microphone = audioCtx.createMediaStreamSource(stream);
-            
             scriptNode = audioCtx.createScriptProcessor(2048, 1, 1);
             
             microphone.connect(analyser);
             analyser.connect(scriptNode);
             scriptNode.connect(audioCtx.destination);
 
+            // ตัวแปรสำหรับคำนวณ Peak Detection
+            let energyHistory = [];
+
             scriptNode.onaudioprocess = function() {
+                if (currentState !== 'HOLDING') return;
+
                 const array = new Uint8Array(analyser.frequencyBinCount);
                 analyser.getByteFrequencyData(array);
                 
-                // คำนวณพลังงานเสียงย่าน Bass/Kick (ย่านความถี่ต่ำสุด)
+                // เน้นย่านความถี่ต่ำ (Bass / Kick drum) Bins 0-8
                 let sum = 0;
-                for (let i = 0; i < 10; i++) {
+                for (let i = 0; i < 8; i++) {
                     sum += array[i];
                 }
-                const average = sum / 10;
-                energyBuffer.push({ time: Date.now(), energy: average });
+                const currentEnergy = sum / 8;
+                const now = performance.now();
+
+                // คำนวณค่าเฉลี่ยพลังงานย้อนหลังเพื่อทำ Dynamic Threshold
+                energyHistory.push(currentEnergy);
+                if (energyHistory.length > 20) energyHistory.shift();
+                const avgEnergy = energyHistory.reduce((a, b) => a + b, 0) / energyHistory.length;
+
+                // ตรวจจับ Beat Peak (พลังงานสูงกว่าค่าเฉลี่ย + เว้นระยะอย่างน้อย 250ms = ไม่เกิน 240 BPM)
+                if (currentEnergy > 100 && currentEnergy > avgEnergy * 1.35) {
+                    if (now - lastBeatTime > 250) {
+                        lastBeatTime = now;
+                        beatTimestamps.push(now);
+
+                        // ⚡ สั่นทันทีแบบ Real-time ขนาดความยาว 50ms
+                        if (supportsVibration) {
+                            navigator.vibrate(50);
+                        }
+
+                        // คำนวณ BPM แสดงผลแบบคร่าวๆ ขณะกดค้าง
+                        updateLiveBPMDisplay();
+                    }
+                }
             };
 
         } catch (err) {
             alert("ไม่สามารถเข้าถึงไมโครโฟนได้: " + err.message);
-            resetState();
+            stopAll();
         }
     }
 
-    function stopListeningAndVibrate() {
-        if (!isListening) return;
-        isListening = false;
-        btn.classList.remove('listening');
+    // แสดงผล BPM แบบ Real-time
+    function updateLiveBPMDisplay() {
+        if (beatTimestamps.length < 2) return;
+        const recent = beatTimestamps.slice(-5);
+        let intervals = [];
+        for (let i = 1; i < recent.length; i++) {
+            intervals.push(recent[i] - recent[i-1]);
+        }
+        const avgInt = intervals.reduce((a, b) => a + b, 0) / intervals.length;
+        const bpm = Math.round(60000 / avgInt);
+        if (bpm >= 50 && bpm <= 220) {
+            bpmDisplay.innerText = bpm + " BPM";
+        }
+    }
+
+    // --- 2. ปล่อยปุ่ม (RELEASE) -> คำนวณ BPM + สั่นต่อแบบไม่สะดุด ---
+    function lockAndContinueVibrating() {
+        currentState = 'LOCKED';
+        btn.classList.remove('holding');
 
         // ปิดการทำงานไมโครโฟน
+        stopMicrophone();
+
+        // คำนวณค่า BPM สรุปผล
+        const calculatedBPM = calculateFinalBPM();
+
+        if (calculatedBPM > 0) {
+            lockedIntervalMs = 60000 / calculatedBPM;
+            bpmDisplay.innerText = calculatedBPM + " BPM";
+            
+            btn.classList.add('vibrating');
+            btn.innerHTML = "แตะ 1 ครั้ง<br>เพื่อหยุดสั่น";
+            statusText.innerText = "สั่นต่อตามจังหวะที่คำนวณได้";
+
+            // 🔄 คำนวณเวลาสั่นครั้งต่อไปเพื่อให้จังหวะสืบต่ออย่างสมบูรณ์แบบ (Seamless Continuation)
+            const now = performance.now();
+            const timeSinceLastBeat = now - lastBeatTime;
+            
+            // เวลาที่ต้องรอสำหรับ Beat ถัดไป
+            let delayToNextBeat = lockedIntervalMs - (timeSinceLastBeat % lockedIntervalMs);
+            if (delayToNextBeat < 0) delayToNextBeat = 0;
+
+            // ตั้งเวลาสำหรับ Beat แรกหลังปล่อยปุ่ม แล้วเข้าสู่ Loop สั่นแบบคงที่
+            timerTimeout = setTimeout(() => {
+                triggerVibe();
+                timerInterval = setInterval(triggerVibe, lockedIntervalMs);
+            }, delayToNextBeat);
+
+        } else {
+            statusText.innerText = "จับจังหวะไม่ได้ ลองกดค้างให้นานขึ้น";
+            bpmDisplay.innerText = "-- BPM";
+            setTimeout(stopAll, 1500);
+        }
+    }
+
+    function triggerVibe() {
+        if (currentState === 'LOCKED' && supportsVibration) {
+            navigator.vibrate(50);
+        }
+    }
+
+    // คำนวณ BPM จากลำดับ Beat ที่บันทึกไว้
+    function calculateFinalBPM() {
+        if (beatTimestamps.length < 3) return 0;
+
+        let intervals = [];
+        for (let i = 1; i < beatTimestamps.length; i++) {
+            intervals.push(beatTimestamps[i] - beatTimestamps[i-1]);
+        }
+
+        // กรองค่ามั่ว (Outliers) ออก
+        intervals.sort((a, b) => a - b);
+        const mid = Math.floor(intervals.length / 2);
+        const medianInterval = intervals.length % 2 !== 0 ? intervals[mid] : (intervals[mid - 1] + intervals[mid]) / 2;
+
+        const bpm = Math.round(60000 / medianInterval);
+
+        if (bpm >= 50 && bpm <= 200) {
+            return bpm;
+        }
+        return 0;
+    }
+
+    function stopMicrophone() {
         if (microphone && microphone.mediaStream) {
             microphone.mediaStream.getTracks().forEach(track => track.stop());
         }
         if (audioCtx) {
             audioCtx.close();
-        }
-
-        statusText.innerText = "กำลังคำนวณจังหวะ (BPM)...";
-
-        // คำนวณ BPM จาก Energy Peaks
-        calculatedBPM = calculateBPM(energyBuffer);
-
-        if (calculatedBPM > 0) {
-            bpmDisplay.innerText = calculatedBPM + " BPM";
-            startVibration(calculatedBPM);
-        } else {
-            statusText.innerText = "ไม่สามารถหาจังหวะได้ ชัดเจน ลองกดค้างใหม่อีกครั้ง";
-            bpmDisplay.innerText = "-- BPM";
-            resetState();
+            audioCtx = null;
         }
     }
 
-    function calculateBPM(buffer) {
-        if (buffer.length < 50) return 0;
+    // --- 3. กดปุ่มอีกครั้ง (STOP) -> หยุดทำงานทั้งหมด ---
+    function stopAll() {
+        currentState = 'IDLE';
 
-        // หาจุดที่มี Peak ของพลังงานเสียง (Peak Detection)
-        let peaks = [];
-        let threshold = 120; // ค่าพลังงานขั้นต่ำ
-        
-        for (let i = 1; i < buffer.length - 1; i++) {
-            if (buffer[i].energy > threshold && 
-                buffer[i].energy > buffer[i-1].energy && 
-                buffer[i].energy > buffer[i+1].energy) {
-                
-                // เว้นระยะห่างระหว่าง Peak อย่างน้อย 250ms (เพื่อไม่ให้รัวเกินไป)
-                if (peaks.length === 0 || (buffer[i].time - peaks[peaks.length - 1]) > 250) {
-                    peaks.push(buffer[i].time);
-                }
-            }
-        }
+        if (timerTimeout) clearTimeout(timerTimeout);
+        if (timerInterval) clearInterval(timerInterval);
+        timerTimeout = null;
+        timerInterval = null;
 
-        if (peaks.length < 2) return 0;
-
-        // หาค่าเฉลี่ย Interval ระหว่าง Peak
-        let intervals = [];
-        for (let i = 1; i < peaks.length; i++) {
-            intervals.push(peaks[i] - peaks[i-1]);
-        }
-
-        const avgInterval = intervals.reduce((a, b) => a + b, 0) / intervals.length;
-        const bpm = Math.round(60000 / avgInterval);
-
-        // จำกัดขอบเขต BPM ของเพลงทั่วไป (60 - 180 BPM)
-        if (bpm >= 60 && bpm <= 180) {
-            return bpm;
-        } else if (bpm > 180 && bpm <= 360) {
-            return Math.round(bpm / 2); // ปรับจังหวะครึ่งหนึ่ง
-        }
-        
-        return 120; // Default fallback BPM
-    }
-
-    function startVibration(bpm) {
-        isVibrating = true;
-        btn.classList.add('vibrating');
-        btn.innerText = "แตะเพื่อหยุดสั่น";
-        statusText.innerText = "กำลังสั่นตามจังหวะ...";
-
-        const intervalMs = (60 / bpm) * 1000;
-
-        // สั่งสั่นตามจังหวะ
-        function triggerVibe() {
-            if (supportsVibration) {
-                navigator.vibrate(60); // สั่นเป็นเวลา 60ms ในแต่ละ Beat
-            }
-        }
-
-        triggerVibe();
-        intervalId = setInterval(triggerVibe, intervalMs);
-    }
-
-    function stopVibration() {
-        if (intervalId) {
-            clearInterval(intervalId);
-            intervalId = null;
-        }
         if (supportsVibration) {
-            navigator.vibrate(0); // สั่งหยุดสั่น
+            navigator.vibrate(0);
         }
-        resetState();
-    }
 
-    function resetState() {
-        isListening = false;
-        isVibrating = false;
+        stopMicrophone();
+
         btn.className = "main-btn";
-        btn.innerText = "กดค้างเพื่อฟังจังหวะ";
+        btn.innerHTML = "กดค้าง<br>เพื่อจับจังหวะ";
         statusText.innerText = "พร้อมใช้งาน";
+        bpmDisplay.innerText = "-- BPM";
     }
 </script>
 </body>
@@ -267,4 +336,4 @@ html_code = """
 """
 
 # แสดงผล HTML ใน Streamlit
-components.html(html_code, height=450)
+components.html(html_code, height=480)
