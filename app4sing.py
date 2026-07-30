@@ -2,19 +2,18 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 st.set_page_config(
-    page_title="Rhythm Sync Guide for Singers",
+    page_title="Real-time Adaptive Rhythm Guide",
     page_icon="🎵",
     layout="centered"
 )
 
 st.title("🎵 Rhythm Guide for Singers")
-st.subheader("ระบบช่วยจับจังหวะเพลงด้วยการสั่นแบบ Real-time")
+st.subheader("ระบบช่วยจับจังหวะเพลงและสั่นแบบ Real-time Continuous")
 
 st.markdown("""
 **วิธีใช้งาน:**
-1. **กดปุ่มค้างไว้** เพื่อฟังเสียงดนตรีผ่านไมโครโฟน -> **โทรศัพท์จะสั่นตามจังหวะเพลงจริงทันที**
-2. **ปล่อยปุ่ม** เมื่อพอใจกับจังหวะ -> โทรศัพท์จะสั่นต่อด้วยจังหวะที่เสถียรอย่างต่อเนื่องโดยไม่สะดุด
-3. **กดปุ่มอีกครั้ง (แตะ 1 ครั้ง)** เพื่อหยุดการสั่น
+1. **กดปุ่ม 1 ครั้ง** เพื่อเริ่มเปิดไมโครโฟน -> ระบบจะจับจังหวะเพลงและ **สั่นตามจังหวะพร้อมปรับ BPM แบบ Real-time ตลอดเวลา**
+2. **กดปุ่มอีกครั้ง (แตะ 1 ครั้ง)** เพื่อปิดระบบและหยุดสั่น
 """)
 
 # JavaScript & HTML App
@@ -54,7 +53,7 @@ html_code = """
             font-weight: bold;
             box-shadow: 0 10px 25px rgba(33, 150, 243, 0.4);
             cursor: pointer;
-            touch-action: none;
+            touch-action: manipulation;
             transition: transform 0.1s ease, background 0.3s ease;
             display: flex;
             align-items: center;
@@ -62,12 +61,7 @@ html_code = """
             text-align: center;
             padding: 20px;
         }
-        .main-btn:active, .main-btn.holding {
-            background: linear-gradient(145deg, #ff5722, #f44336);
-            transform: scale(0.95);
-            box-shadow: 0 5px 15px rgba(244, 67, 54, 0.5);
-        }
-        .main-btn.vibrating {
+        .main-btn.active {
             background: linear-gradient(145deg, #4CAF50, #43a047);
             animation: pulse 1s infinite;
         }
@@ -80,7 +74,7 @@ html_code = """
             min-height: 27px;
         }
         .bpm-display {
-            font-size: 36px;
+            font-size: 38px;
             font-weight: 800;
             color: #1976D2;
             margin-top: 10px;
@@ -95,14 +89,13 @@ html_code = """
 <body>
 
 <div class="container">
-    <button id="rhythmBtn" class="main-btn">กดค้าง<br>เพื่อจับจังหวะ</button>
+    <button id="rhythmBtn" class="main-btn">กดเพื่อเริ่ม<br>จับจังหวะ</button>
     <div id="status" class="status">พร้อมใช้งาน</div>
     <div id="bpmDisplay" class="bpm-display">-- BPM</div>
 </div>
 
 <script>
-    // System States: 'IDLE', 'HOLDING', 'LOCKED'
-    let currentState = 'IDLE';
+    let isActive = false;
 
     let audioCtx = null;
     let analyser = null;
@@ -111,52 +104,32 @@ html_code = """
 
     let beatTimestamps = [];
     let lastBeatTime = 0;
-    let lockedIntervalMs = 0;
     
-    let timerTimeout = null;
-    let timerInterval = null;
-
     const btn = document.getElementById('rhythmBtn');
     const statusText = document.getElementById('status');
     const bpmDisplay = document.getElementById('bpmDisplay');
 
     const supportsVibration = "vibrate" in navigator;
 
-    // --- Touch & Mouse Event Handling ---
-    btn.addEventListener('pointerdown', handlePointerDown);
-    btn.addEventListener('pointerup', handlePointerUp);
-    btn.addEventListener('pointerleave', handlePointerUp);
+    btn.addEventListener('click', toggleSystem);
 
-    function handlePointerDown(e) {
-        e.preventDefault();
-        
-        // ถ้ากำลังสั่นแบบ LOCKED อยู่ แล้วกดปุ่มซ้ำ -> ให้หยุดทำงาน
-        if (currentState === 'LOCKED') {
-            stopAll();
-            return;
-        }
-
-        if (currentState === 'IDLE') {
-            startHolding();
+    function toggleSystem() {
+        if (!isActive) {
+            startRealtimeTracking();
+        } else {
+            stopSystem();
         }
     }
 
-    function handlePointerUp(e) {
-        e.preventDefault();
-        if (currentState === 'HOLDING') {
-            lockAndContinueVibrating();
-        }
-    }
-
-    // --- 1. เริ่มกดค้าง (HOLDING) -> ฟังเสียง + สั่น Real-time ---
-    async function startHolding() {
-        currentState = 'HOLDING';
+    // --- เริ่มทำงานจับจังหวะและสั่นแบบ Real-time Continuous ---
+    async function startRealtimeTracking() {
+        isActive = true;
         beatTimestamps = [];
         lastBeatTime = 0;
 
-        btn.classList.add('holding');
-        btn.innerHTML = "กำลังฟัง & สั่น<br>ตามจังหวะ...";
-        statusText.innerText = "กำลังตรวจจับจังหวะเสียงดนตรี...";
+        btn.classList.add('active');
+        btn.innerHTML = "กำลังใช้งาน<br>(แตะเพื่อหยุด)";
+        statusText.innerText = "กำลังฟังดนตรีและสั่นปรับตามจังหวะ...";
         bpmDisplay.innerText = "-- BPM";
 
         try {
@@ -172,16 +145,15 @@ html_code = """
             analyser.connect(scriptNode);
             scriptNode.connect(audioCtx.destination);
 
-            // ตัวแปรสำหรับคำนวณ Peak Detection
             let energyHistory = [];
 
             scriptNode.onaudioprocess = function() {
-                if (currentState !== 'HOLDING') return;
+                if (!isActive) return;
 
                 const array = new Uint8Array(analyser.frequencyBinCount);
                 analyser.getByteFrequencyData(array);
                 
-                // เน้นย่านความถี่ต่ำ (Bass / Kick drum) Bins 0-8
+                // จับพลังงานช่วงเบส (Bass / Kick drum) Bins 0-7
                 let sum = 0;
                 for (let i = 0; i < 8; i++) {
                     sum += array[i];
@@ -189,118 +161,69 @@ html_code = """
                 const currentEnergy = sum / 8;
                 const now = performance.now();
 
-                // คำนวณค่าเฉลี่ยพลังงานย้อนหลังเพื่อทำ Dynamic Threshold
+                // Dynamic Threshold เพื่อปรับตามความดังเบาของเพลงตลอดเวลา
                 energyHistory.push(currentEnergy);
-                if (energyHistory.length > 20) energyHistory.shift();
+                if (energyHistory.length > 25) energyHistory.shift();
                 const avgEnergy = energyHistory.reduce((a, b) => a + b, 0) / energyHistory.length;
 
-                // ตรวจจับ Beat Peak (พลังงานสูงกว่าค่าเฉลี่ย + เว้นระยะอย่างน้อย 250ms = ไม่เกิน 240 BPM)
-                if (currentEnergy > 100 && currentEnergy > avgEnergy * 1.35) {
+                // ตรวจจับ Beat Peak และสั่นตามทันทีเมื่อเจอจังหวะ
+                if (currentEnergy > 90 && currentEnergy > avgEnergy * 1.3) {
+                    // ป้องกันการสั่นรัวเกินไป (เว้นระยะอย่างน้อย 250ms = รองรับได้สูงสุด 240 BPM)
                     if (now - lastBeatTime > 250) {
                         lastBeatTime = now;
                         beatTimestamps.push(now);
 
-                        // ⚡ สั่นทันทีแบบ Real-time ขนาดความยาว 50ms
+                        // เก็บข้อมูลย้อนหลัง 10 จังหวะล่าสุดเพื่อคำนวณ BPM ให้เสถียร
+                        if (beatTimestamps.length > 10) beatTimestamps.shift();
+
+                        // ⚡ สั่นทันทีตามจังหวะดนตรีที่จับได้ในขณะนั้น
                         if (supportsVibration) {
-                            navigator.vibrate(50);
+                            navigator.vibrate(60);
                         }
 
-                        // คำนวณ BPM แสดงผลแบบคร่าวๆ ขณะกดค้าง
-                        updateLiveBPMDisplay();
+                        // คำนวณและอัปเดต BPM แสดงผลแบบ Real-time
+                        calculateAndDisplayBPM();
                     }
                 }
             };
 
         } catch (err) {
             alert("ไม่สามารถเข้าถึงไมโครโฟนได้: " + err.message);
-            stopAll();
+            stopSystem();
         }
     }
 
-    // แสดงผล BPM แบบ Real-time
-    function updateLiveBPMDisplay() {
-        if (beatTimestamps.length < 2) return;
-        const recent = beatTimestamps.slice(-5);
-        let intervals = [];
-        for (let i = 1; i < recent.length; i++) {
-            intervals.push(recent[i] - recent[i-1]);
-        }
-        const avgInt = intervals.reduce((a, b) => a + b, 0) / intervals.length;
-        const bpm = Math.round(60000 / avgInt);
-        if (bpm >= 50 && bpm <= 220) {
-            bpmDisplay.innerText = bpm + " BPM";
-        }
-    }
-
-    // --- 2. ปล่อยปุ่ม (RELEASE) -> คำนวณ BPM + สั่นต่อแบบไม่สะดุด ---
-    function lockAndContinueVibrating() {
-        currentState = 'LOCKED';
-        btn.classList.remove('holding');
-
-        // ปิดการทำงานไมโครโฟน
-        stopMicrophone();
-
-        // คำนวณค่า BPM สรุปผล
-        const calculatedBPM = calculateFinalBPM();
-
-        if (calculatedBPM > 0) {
-            lockedIntervalMs = 60000 / calculatedBPM;
-            bpmDisplay.innerText = calculatedBPM + " BPM";
-            
-            btn.classList.add('vibrating');
-            btn.innerHTML = "แตะ 1 ครั้ง<br>เพื่อหยุดสั่น";
-            statusText.innerText = "สั่นต่อตามจังหวะที่คำนวณได้";
-
-            // 🔄 คำนวณเวลาสั่นครั้งต่อไปเพื่อให้จังหวะสืบต่ออย่างสมบูรณ์แบบ (Seamless Continuation)
-            const now = performance.now();
-            const timeSinceLastBeat = now - lastBeatTime;
-            
-            // เวลาที่ต้องรอสำหรับ Beat ถัดไป
-            let delayToNextBeat = lockedIntervalMs - (timeSinceLastBeat % lockedIntervalMs);
-            if (delayToNextBeat < 0) delayToNextBeat = 0;
-
-            // ตั้งเวลาสำหรับ Beat แรกหลังปล่อยปุ่ม แล้วเข้าสู่ Loop สั่นแบบคงที่
-            timerTimeout = setTimeout(() => {
-                triggerVibe();
-                timerInterval = setInterval(triggerVibe, lockedIntervalMs);
-            }, delayToNextBeat);
-
-        } else {
-            statusText.innerText = "จับจังหวะไม่ได้ ลองกดค้างให้นานขึ้น";
-            bpmDisplay.innerText = "-- BPM";
-            setTimeout(stopAll, 1500);
-        }
-    }
-
-    function triggerVibe() {
-        if (currentState === 'LOCKED' && supportsVibration) {
-            navigator.vibrate(50);
-        }
-    }
-
-    // คำนวณ BPM จากลำดับ Beat ที่บันทึกไว้
-    function calculateFinalBPM() {
-        if (beatTimestamps.length < 3) return 0;
+    // คำนวณค่า BPM ล่าสุดแบบ Real-time
+    function calculateAndDisplayBPM() {
+        if (beatTimestamps.length < 3) return;
 
         let intervals = [];
         for (let i = 1; i < beatTimestamps.length; i++) {
             intervals.push(beatTimestamps[i] - beatTimestamps[i-1]);
         }
 
-        // กรองค่ามั่ว (Outliers) ออก
+        // ใช้ค่ามัธยฐาน (Median) กรองค่าดิบเพื่อป้องกันจังหวะหลุด
         intervals.sort((a, b) => a - b);
         const mid = Math.floor(intervals.length / 2);
-        const medianInterval = intervals.length % 2 !== 0 ? intervals[mid] : (intervals[mid - 1] + intervals[mid]) / 2;
+        const medianInterval = intervals.length % 2 !== 0 
+            ? intervals[mid] 
+            : (intervals[mid - 1] + intervals[mid]) / 2;
 
-        const bpm = Math.round(60000 / medianInterval);
+        const currentBPM = Math.round(60000 / medianInterval);
 
-        if (bpm >= 50 && bpm <= 200) {
-            return bpm;
+        if (currentBPM >= 50 && currentBPM <= 220) {
+            bpmDisplay.innerText = currentBPM + " BPM";
         }
-        return 0;
     }
 
-    function stopMicrophone() {
+    // --- หยุดทำงานทั้งหมด ---
+    function stopSystem() {
+        isActive = false;
+
+        if (supportsVibration) {
+            navigator.vibrate(0);
+        }
+
         if (microphone && microphone.mediaStream) {
             microphone.mediaStream.getTracks().forEach(track => track.stop());
         }
@@ -308,25 +231,9 @@ html_code = """
             audioCtx.close();
             audioCtx = null;
         }
-    }
-
-    // --- 3. กดปุ่มอีกครั้ง (STOP) -> หยุดทำงานทั้งหมด ---
-    function stopAll() {
-        currentState = 'IDLE';
-
-        if (timerTimeout) clearTimeout(timerTimeout);
-        if (timerInterval) clearInterval(timerInterval);
-        timerTimeout = null;
-        timerInterval = null;
-
-        if (supportsVibration) {
-            navigator.vibrate(0);
-        }
-
-        stopMicrophone();
 
         btn.className = "main-btn";
-        btn.innerHTML = "กดค้าง<br>เพื่อจับจังหวะ";
+        btn.innerHTML = "กดเพื่อเริ่ม<br>จับจังหวะ";
         statusText.innerText = "พร้อมใช้งาน";
         bpmDisplay.innerText = "-- BPM";
     }
